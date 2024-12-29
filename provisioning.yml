@@ -1,5 +1,5 @@
 ---
-- hosts: all
+- hosts: wordpress
   handlers:
     - name: restart apache
       service:
@@ -13,7 +13,6 @@
         - apache2
         - ghostscript
         - libapache2-mod-php
-        - mysql-server
         - php
         - php-bcmath
         - php-curl
@@ -47,3 +46,81 @@
       become: yes
       notify:
         - restart apache
+    - name: Copy file with owner and permissions
+      ansible.builtin.copy:
+        src: '{{ wp_dir }}/wp-config-sample.php'
+        dest: '{{ wp_dir }}/wp-config.php'
+        force: no
+        remote_src: yes
+      become: yes
+    - name: configure wp-config with database
+      ansible.builtin.replace:
+        path: '{{ wp_dir }}/wp-config.php'
+        regexp: '{{item.regexp}}'
+        replace: '{{item.replace}}'
+      with_items: 
+      - {regexp: 'database_name_here', replace: '{{ wp_db_name }}'}
+      - {regexp: 'username_here', replace: '{{ wp_db_user }}'}
+      - {regexp: 'password_here', replace: '{{ wp_db_pass }}'}
+      - {regexp: 'localhost', replace: '{{ db_ip }}'}
+      become: yes
+    - name: Replace a localhost entry searching for a literal string to avoid escaping
+      ansible.builtin.lineinfile:
+        path: '{{ wp_dir }}/wp-config.php'
+        search_string: '{{item.search_string}}'
+        line: '{{item.line}}'
+      with_items: 
+      - {search_string: "define( 'AUTH_KEY',         'put your unique phrase here' );", line: "define('AUTH_KEY',         '{j0|DlXfe<[8%-=,qX8AfOM`~SIB=1eC*P rk~t4K }QLpU5$Z(|N7^!0pd&%9-~');"}
+      - {search_string: "define( 'SECURE_AUTH_KEY',  'put your unique phrase here' );", line: "define('SECURE_AUTH_KEY',  'Bi}gmaA#mYCe()>P0%$~rJE{L^mYdp(rL/3r^Tw3?9ngBZi)O9$Pb%v?vM/JY{D;');"}
+      - {search_string: "define( 'LOGGED_IN_KEY',    'put your unique phrase here' );", line: "define('LOGGED_IN_KEY',    'Ia=jN0>|rp@3Nk;cU`a|*Z7<a8|Bd]+E|,Aooy|S Dq|zHQa78G0~+)-lu+J}4-7');"}
+      - {search_string: "define( 'NONCE_KEY',        'put your unique phrase here' );", line: "define('NONCE_KEY',        '&5q^aVa[Gq{?wbw(eYm]i1%~CY?&yNsf%HgQ?wR`g4( !>bx8vO#wFaQ+`Q@T`I-');"}
+      - {search_string: "define( 'AUTH_SALT',        'put your unique phrase here' );", line: "define('AUTH_SALT',        'l9~=9aJ<~Vj$Is=|(KdPr+>y3Cs<Eq]J.#|w.w,-[++1g7*myhzaDvz:poE-#8?i');"}
+      - {search_string: "define( 'SECURE_AUTH_SALT', 'put your unique phrase here' );", line: "define('SECURE_AUTH_SALT', 'WfM>$VJ5LLW<K=}/fC+JedtAW;Vjbm.Hp|hyU|3geQO+A#C@f7yn/7B{][y.[Gql');"}
+      - {search_string: "define( 'LOGGED_IN_SALT',   'put your unique phrase here' );", line: "define('LOGGED_IN_SALT',   'Sitd=4]}||L+g$o$>/+:%+|c^IvmKcH7*)Yf.2K{;<yP`hjk|AFo;t(y~Tf9g#;p');"}
+      - {search_string: "define( 'NONCE_SALT',       'put your unique phrase here' );", line: "define('NONCE_SALT',       '.!m5[+$U_w!b+vOqn1P.sB|9Z@$pd1IdG)^r1O|z2z7  l{Q4@MP|fA5gDkaF5xq');"}
+      become: yes
+
+- hosts: mysql
+  handlers:
+    - name: restart mysql
+      service:
+        name: mysql
+        state: restarted
+      become: yes
+  tasks:
+    - name: Install a list of packages (dependencias)
+      ansible.builtin.apt:
+        pkg: 
+        - mysql-server
+        - python3-pymysql
+        state: latest
+        update_cache: yes
+      become: yes
+    - name: Create a new database with name 'wordpress_db'
+      community.mysql.mysql_db:
+        name: '{{ wp_db_name }}'
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+      become: yes
+    - name: Create database user with name 'wordpress_user' and password '12345' with all database privileges
+      community.mysql.mysql_user:
+        name: '{{ wp_db_user }}'
+        password: '{{ wp_db_pass }}'
+        priv: '{{ wp_db_name }}.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER'
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+        column_case_sensitive: false
+        host: '{{ item }}'
+      with_items:
+      - 'localhost'
+      - '127.0.0.1'
+      - '{{ wp_ip }}'
+      become: yes
+    - name: configure database
+      ansible.builtin.replace:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '127.0.0.1'
+        replace: '0.0.0.0'
+      become: yes
+      notify:
+        - restart mysql
